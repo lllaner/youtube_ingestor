@@ -8,6 +8,7 @@ Python service that streams vote commands from YouTube Live Chat (gRPC) and send
 - **Vote Parsing**: Parses vote commands: `!1`, `!2`, `!3`, etc.
 - **Rails Integration**: Sends votes to Rails API with authentication
 - **OAuth Support**: Automatic OAuth token management
+- **Message Deduplication**: Tracks processed message IDs to prevent duplicate processing on reconnection
 - **Robust Error Handling**: Automatic reconnection with exponential backoff
 - **Debug Mode**: Stdin mode for testing without live stream
 - **Windows-friendly**: Works with PowerShell and Git Bash
@@ -61,7 +62,7 @@ You need to generate Python stubs from the proto file before running:
 
 **Git Bash:**
 ```bash
-python -m grpc_tools.protoc -I protos --python_out=. --grpc_python_out=. protos/stream_list.proto
+python -m grpc_tools.protoc -I . --python_out=. --grpc_python_out=. stream_list.proto
 ```
 
 This will generate:
@@ -137,8 +138,9 @@ The ingestor will:
 2. Find the active live stream
 3. Connect to YouTube Live Chat via gRPC
 4. Stream messages in real-time
-5. Parse vote commands (`!1`, `!2`, etc.)
-6. Send votes to Rails API
+5. Track processed message IDs to avoid duplicates (especially on reconnection)
+6. Parse vote commands (`!1`, `!2`, etc.)
+7. Send votes to Rails API
 
 ### Stdin Mode (Debugging)
 
@@ -259,6 +261,19 @@ The ingestor caches the live chat ID to `live_chat_id.txt` for faster startup. T
 - The streaming call returns NOT_FOUND
 - You manually delete the cache file
 
+## Message Deduplication
+
+The ingestor uses an in-memory `set()` to track processed message IDs. This prevents duplicate processing when:
+- YouTube API sends historical messages on initial connection
+- The stream reconnects after a network error
+- The same message is received multiple times
+
+**Important notes:**
+- The message ID set is stored in memory and resets on script restart
+- Rails provides additional protection with a unique index on `[poll_id, author_channel_id]`
+- Even if the Python set is lost (e.g., on restart), Rails will reject duplicate votes
+- This two-layer protection ensures no votes are counted twice
+
 ## Logging
 
 Logs include:
@@ -273,6 +288,7 @@ Logs include:
 ### "gRPC proto files not found"
 - Run the proto generation script: `.\scripts\gen_proto.bat` (PowerShell) or use the manual command
 - Ensure `stream_list_pb2.py` and `stream_list_pb2_grpc.py` are in the `youtube_ingestor/` folder
+- Ensure `stream_list.proto` exists in the `youtube_ingestor/` folder (root directory)
 
 ### "INGEST_KEY environment variable is required"
 - Make sure you have a `.env` file with `INGEST_KEY` set
@@ -312,9 +328,12 @@ Logs include:
 - Ensure the stream is actually live (not just scheduled)
 
 ### Double-counting votes
-- Rails already deduplicates votes by `poll_id + author_channel_id`
+- **Two-layer protection:**
+  1. **Python side**: In-memory `set()` tracks processed message IDs to prevent re-processing the same message
+  2. **Rails side**: Unique database index on `[poll_id, author_channel_id]` prevents duplicate votes
 - Reconnecting to the stream won't cause double-counting
 - Each user can only have one vote per poll
+- If the Python script restarts, old messages may be processed again, but Rails will reject duplicates
 
 ## File Structure
 
@@ -324,19 +343,18 @@ youtube_ingestor/
 ├── requirements.txt         # Python dependencies
 ├── .env                     # Environment variables (create this)
 ├── live_chat_id.txt         # Cached live chat ID (auto-generated)
-├── protos/
-│   └── stream_list.proto    # gRPC proto definition
+├── stream_list.proto        # gRPC proto definition
 ├── scripts/
 │   └── gen_proto.bat        # Script to generate proto stubs
 ├── stream_list_pb2.py       # Generated proto messages (after gen_proto)
-└── stream_list_pb2_grpc.py  # Generated proto stubs (after gen_proto)
+└── stream_list_pb2_grpc.py # Generated proto stubs (after gen_proto)
 ```
 
 ## Development
 
 ### Regenerating Proto Files
 
-If you modify `protos/stream_list.proto`, regenerate the Python stubs:
+If you modify `stream_list.proto`, regenerate the Python stubs:
 
 ```bash
 .\scripts\gen_proto.bat
@@ -344,7 +362,7 @@ If you modify `protos/stream_list.proto`, regenerate the Python stubs:
 
 Or manually:
 ```bash
-python -m grpc_tools.protoc -I protos --python_out=. --grpc_python_out=. protos/stream_list.proto
+python -m grpc_tools.protoc -I . --python_out=. --grpc_python_out=. stream_list.proto
 ```
 
 ### Adding New Vote Commands
@@ -356,6 +374,8 @@ Edit the `parse_vote()` function in `main.py` to add new patterns.
 - The ingestor automatically handles token refresh
 - Live chat ID is cached for faster startup
 - Reconnection is automatic with exponential backoff
-- Rails handles vote deduplication, so reconnecting won't cause issues
+- Message deduplication prevents processing the same message twice within a session
+- Rails provides additional vote deduplication via unique database constraints
+- The message ID tracking set is in-memory and resets on restart (Rails still protects against duplicates)
 - The `--stdin` flag is useful for testing without a live stream
 # youtube_ingestor

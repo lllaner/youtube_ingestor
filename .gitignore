@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Generated proto files
+*_pb2.py
+*_pb2_grpc.py
+
+# Environment variables
+.env
+
+# OAuth files (contain sensitive data)
+client_secret.json
+token.yaml
+token.json
+
+# Cache files
+live_chat_id.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
